@@ -6,6 +6,9 @@ worktree for each task and runs a two-pass Codex flow: first pass does the work
 and writes a summary plus validation plan; second pass validates independently
 against the original instructions. All tasks run in parallel.
 
+Best suited for multiple independent tasks you want to execute concurrently,
+each in its own branch/worktree without cross-contamination.
+
 Flow sketch:
 ```
 .codex/tasks/*.txt
