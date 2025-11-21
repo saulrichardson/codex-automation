@@ -5,14 +5,16 @@
   "main": "dist/runAll.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/runAll.js"
+    "start": "node dist/runAll.js",
+    "doctor": "node scripts/doctor.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@openai/codex-sdk": "^0.61.0"
+    "@openai/codex-sdk": "^0.61.0",
+    "semver": "^7.7.3"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
