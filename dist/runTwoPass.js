@@ -62,7 +62,8 @@ function buildValidationPrompt(taskInstructions, validationPlan) {
         "```",
         validationPlan,
         "```",
-        "Validate whether the current repository satisfies the original instructions. Use the plan for structure but do not trust its claims—inspect files and run commands yourself. Refine the plan if needed.",
+        "Validate whether the approach and work done actually accomplish the original instructions. Use the plan for structure but do not trust its claims—inspect files and run commands yourself, refining the plan if needed.",
+        "Focus on judging the correctness and sufficiency of the work/approach (not just echoing the current state).",
         "In your final response, give a verdict (ACCEPT/REJECT against the original instructions), list issues, and recommend follow-ups.",
     ].join("\n\n");
 }
