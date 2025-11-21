@@ -77,15 +77,16 @@ function buildPlanPrompt(): string {
 function buildValidationPrompt(taskInstructions: string, validationPlan: string): string {
   return [
     "You are the validator agent. You did not perform the work.",
-    "Task instructions:",
+    "Original task instructions (source of truth):",
     "```",
     taskInstructions,
     "```",
-    "Validation plan:",
+    "First-pass validation plan (guidance only—verify independently):",
     "```",
     validationPlan,
     "```",
-    "Follow (and refine if needed) this plan to validate the repository. Inspect files and run commands as needed. In final response, give verdict (ACCEPT/REJECT), issues, and recommendations.",
+    "Validate whether the current repository satisfies the original instructions. Use the plan for structure but do not trust its claims—inspect files and run commands yourself. Refine the plan if needed.",
+    "In your final response, give a verdict (ACCEPT/REJECT against the original instructions), list issues, and recommend follow-ups.",
   ].join("\n\n");
 }
 
