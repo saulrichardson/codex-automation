@@ -1,7 +1,7 @@
 # Codex Two-Pass Runner
 
-Purpose: automate Codex-driven task execution for a host repo. You drop plain
-text instructions in `.codex/tasks/`; this runner creates an isolated branch +
+Automates Codex-driven task execution for a host repo. You drop plain text
+instructions in `.codex/tasks/`; this runner creates an isolated branch +
 worktree for each task and runs a two-pass Codex flow: first pass does the work
 and writes a summary plus validation plan; second pass validates independently
 against the original instructions. All tasks run in parallel.
