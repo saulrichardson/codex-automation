@@ -1,8 +1,8 @@
 # Codex Two-Pass Runner
 
-CODEN: Runs all `.codex/tasks/*.txt` instructions in parallel, one branch/worktree
-each, using the Codex TypeScript SDK (two-pass workflow: work → summary/plan →
-validation).
+One command finds every `.codex/tasks/*.txt`, spins a per-task branch/worktree,
+and drives a two-pass Codex flow (do the work, write summary/plan, then validate)
+for all tasks in parallel.
 
 ## Requirements
 - Node.js 18+
