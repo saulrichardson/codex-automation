@@ -1,8 +1,22 @@
 # Codex Two-Pass Runner
 
-One command finds every `.codex/tasks/*.txt`, spins a per-task branch/worktree,
-and drives a two-pass Codex flow (do the work, write summary/plan, then validate)
-for all tasks in parallel.
+Purpose: automate Codex-driven task execution for a host repo. You drop plain
+text instructions in `.codex/tasks/`; this runner creates an isolated branch +
+worktree for each task and runs a two-pass Codex flow: first pass does the work
+and writes a summary plus validation plan; second pass validates independently
+against the original instructions. All tasks run in parallel.
+
+Flow sketch:
+```
+.codex/tasks/*.txt
+        │ (discover & parallelize)
+        ▼
+for each task:
+  branch = codex/<slug>
+  worktree = .codex/worktrees/<slug>
+  thread1: do work ➜ codex/work-summary.md + validation-plan.md
+  thread2: validate using instructions + plan (independent verdict)
+```
 
 ## Requirements
 - Node.js 18+
