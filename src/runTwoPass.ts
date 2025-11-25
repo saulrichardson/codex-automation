@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { Codex } from "@openai/codex-sdk";
+import { Codex, type ModelReasoningEffort } from "@openai/codex-sdk";
 
 const execFileAsync = promisify(execFile);
 
@@ -14,6 +14,11 @@ export interface TwoPassResult {
   validationResultMessage: string;
   summaryFile: string;
   validationPlanFile: string;
+  validationReportFile: string;
+  postValidationReflectionMessage: string;
+  workThreadId: string;
+  validationThreadId: string;
+  threadIdsFile: string;
 }
 
 export interface RunTwoPassOptions {
@@ -86,8 +91,18 @@ function buildValidationPrompt(taskInstructions: string, validationPlan: string)
     validationPlan,
     "```",
     "Validate whether the approach and work done actually accomplish the original instructions. Use the plan for structure but do not trust its claims—inspect files and run commands yourself, refining the plan if needed.",
-    "Focus on judging the correctness and sufficiency of the work/approach (not just echoing the current state).",
-    "In your final response, give a verdict (ACCEPT/REJECT against the original instructions), list issues, and recommend follow-ups.",
+    "Write your validation report to codex/validation-report.md. Include: a clear ACCEPT/REJECT verdict against the original instructions, numbered issues, and recommended follow-ups.",
+    "After writing the file, reply with a brief confirmation (not the full report).",
+  ].join("\n\n");
+}
+
+function buildReflectionPrompt(validationReport: string): string {
+  return [
+    "Validator report:",
+    "```",
+    validationReport,
+    "```",
+    "You are the original worker. Briefly react: state whether you agree, what fixes or follow-ups you would prioritize, and any clarifications. Keep it concise.",
   ].join("\n\n");
 }
 
@@ -99,10 +114,12 @@ export async function runTwoPassOnTask(opts: RunTwoPassOptions): Promise<TwoPass
 
   await ensureWorktree({ repoRoot, worktreePath, branchName, baseBranch });
 
+  const model = process.env.CODEX_MODEL ?? "gpt-5.1-codex-max";
+  const modelReasoningEffort = (process.env.CODEX_REASONING_EFFORT ?? "high") as ModelReasoningEffort;
   const codex = new Codex();
   const cwd = worktreePath;
 
-  const thread1 = codex.startThread({ workingDirectory: cwd });
+  const thread1 = codex.startThread({ workingDirectory: cwd, model, modelReasoningEffort });
   const workPrompt = buildWorkPrompt(taskInstructions);
   const workTurn = await thread1.run(workPrompt);
   const firstPassWorkMessage = workTurn.finalResponse;
@@ -110,16 +127,72 @@ export async function runTwoPassOnTask(opts: RunTwoPassOptions): Promise<TwoPass
   await fs.mkdir(path.join(cwd, "codex"), { recursive: true });
   const planPrompt = buildPlanPrompt();
   const planTurn = await thread1.run(planPrompt);
-  const firstPassValidationPlanMessage = planTurn.finalResponse;
+  let firstPassValidationPlanMessage = planTurn.finalResponse;
 
   const summaryFile = path.join(cwd, "codex", "work-summary.md");
   const validationPlanFile = path.join(cwd, "codex", "validation-plan.md");
-  const validationPlanText = await fs.readFile(validationPlanFile, "utf8");
+  let validationPlanText: string;
+  try {
+    validationPlanText = await fs.readFile(validationPlanFile, "utf8");
+  } catch (err) {
+    const missingPlan = (err as NodeJS.ErrnoException)?.code === "ENOENT";
+    if (!missingPlan) throw err;
 
-  const thread2 = codex.startThread({ workingDirectory: cwd });
+    const retryPrompt = [
+      "The file codex/validation-plan.md was not found.",
+      "Write the validation plan to codex/validation-plan.md now, then reply with a short confirmation.",
+    ].join("\n\n");
+
+    const retryTurn = await thread1.run(retryPrompt);
+    firstPassValidationPlanMessage = `${firstPassValidationPlanMessage}\n\n[retry]\n${retryTurn.finalResponse}`;
+    validationPlanText = await fs.readFile(validationPlanFile, "utf8");
+  }
+
+  const thread2 = codex.startThread({ workingDirectory: cwd, model, modelReasoningEffort });
   const validationPrompt = buildValidationPrompt(taskInstructions, validationPlanText);
   const validationTurn = await thread2.run(validationPrompt);
-  const validationResultMessage = validationTurn.finalResponse;
+  let validationResultMessage = validationTurn.finalResponse;
+
+  const validationReportFile = path.join(cwd, "codex", "validation-report.md");
+  let validationReportText: string;
+  try {
+    validationReportText = await fs.readFile(validationReportFile, "utf8");
+  } catch (err) {
+    const missingReport = (err as NodeJS.ErrnoException)?.code === "ENOENT";
+    if (!missingReport) throw err;
+
+    const retryPrompt = [
+      "The file codex/validation-report.md was not found.",
+      "Write the validation report to codex/validation-report.md now, then reply with a short confirmation.",
+    ].join("\n\n");
+
+    const retryTurn = await thread2.run(retryPrompt);
+    validationResultMessage = `${validationResultMessage}\n\n[retry]\n${retryTurn.finalResponse}`;
+    validationReportText = await fs.readFile(validationReportFile, "utf8");
+  }
+
+  const reflectionPrompt = buildReflectionPrompt(validationReportText);
+  const reflectionTurn = await thread1.run(reflectionPrompt);
+  const postValidationReflectionMessage = reflectionTurn.finalResponse;
+
+  const workThreadId = thread1.id;
+  const validationThreadId = thread2.id;
+  if (!workThreadId || !validationThreadId) {
+    throw new Error("Thread IDs missing; cannot persist session info");
+  }
+
+  const threadIdsFile = path.join(cwd, "codex", "thread-ids.json");
+  await fs.writeFile(
+    threadIdsFile,
+    JSON.stringify(
+      {
+        workThreadId,
+        validationThreadId,
+      },
+      null,
+      2
+    )
+  );
 
   return {
     branchName,
@@ -129,5 +202,10 @@ export async function runTwoPassOnTask(opts: RunTwoPassOptions): Promise<TwoPass
     validationResultMessage,
     summaryFile,
     validationPlanFile,
+    validationReportFile,
+    postValidationReflectionMessage,
+    workThreadId,
+    validationThreadId,
+    threadIdsFile,
   };
 }

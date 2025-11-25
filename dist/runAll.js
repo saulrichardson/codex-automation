@@ -1,21 +1,16 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const promises_1 = __importDefault(require("node:fs/promises"));
-const node_path_1 = __importDefault(require("node:path"));
-const runTwoPass_1 = require("./runTwoPass");
+import fs from "node:fs/promises";
+import path from "node:path";
+import { runTwoPassOnTask } from "./runTwoPass.js";
 async function findTaskFiles(repoRoot) {
-    const tasksDir = node_path_1.default.join(repoRoot, ".codex", "tasks");
-    const entries = await promises_1.default.readdir(tasksDir);
+    const tasksDir = path.join(repoRoot, ".codex", "tasks");
+    const entries = await fs.readdir(tasksDir);
     const taskFiles = entries.filter((name) => name.endsWith(".txt"));
     if (taskFiles.length === 0) {
         throw new Error("No task files found in .codex/tasks");
     }
     return taskFiles.map((name) => ({
-        taskSlug: node_path_1.default.basename(name, ".txt"),
-        instructionsPath: node_path_1.default.join(tasksDir, name),
+        taskSlug: path.basename(name, ".txt"),
+        instructionsPath: path.join(tasksDir, name),
     }));
 }
 function formatFailure(reason) {
@@ -28,8 +23,8 @@ async function main() {
     const repoRoot = process.cwd();
     const tasks = await findTaskFiles(repoRoot);
     const taskPromises = tasks.map(async (task) => {
-        const taskInstructions = await promises_1.default.readFile(task.instructionsPath, "utf8");
-        const result = await (0, runTwoPass_1.runTwoPassOnTask)({
+        const taskInstructions = await fs.readFile(task.instructionsPath, "utf8");
+        const result = await runTwoPassOnTask({
             repoRoot,
             taskSlug: task.taskSlug,
             taskInstructions,
@@ -42,7 +37,14 @@ async function main() {
         const taskSlug = tasks[index]?.taskSlug ?? "unknown-task";
         if (entry.status === "fulfilled") {
             const { result } = entry.value;
-            console.log(`✅ ${taskSlug} | branch: ${result.branchName} | worktree: ${result.worktreePath}`);
+            console.log([
+                `✅ ${taskSlug}`,
+                `branch: ${result.branchName}`,
+                `worktree: ${result.worktreePath}`,
+                `workerThread: ${result.workThreadId}`,
+                `validatorThread: ${result.validationThreadId}`,
+                `threadIds: ${result.threadIdsFile}`,
+            ].join(" | "));
         }
         else {
             failed += 1;

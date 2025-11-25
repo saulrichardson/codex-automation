@@ -18,14 +18,17 @@ for each task:
   branch = codex/<slug>
   worktree = .codex/worktrees/<slug>
   thread1: do work ➜ codex/work-summary.md + validation-plan.md
-  thread2: validate using instructions + plan (independent verdict)
+  thread2: validate using instructions + plan ➜ codex/validation-report.md
+  thread1: reflect on validator report (no new files)
+  Save thread IDs for resuming later ➜ codex/thread-ids.json
 ```
 
 ## Requirements
 - Node.js 18+
 - Git repository (host repo)
 - Environment: `CODEX_API_KEY` (and `OPENAI_BASE_URL` if you use a custom
-  endpoint)
+  endpoint). Optional: `CODEX_MODEL` (default `gpt-5.1-codex-max`) and
+  `CODEX_REASONING_EFFORT` (default `high`).
 
 ## Using in this repo (direct clone)
 ```bash
@@ -60,7 +63,7 @@ echo "Fix the flakey CI job" > .codex/tasks/fix-ci.txt   # slug = fix-ci
     - `codex/work-summary.md`
     - `codex/validation-plan.md`
   - Runs Codex thread 2 (fresh) to validate using the original instructions +
-    the saved plan.
+    the saved plan and writes codex/validation-report.md.
 - Console prints per-task ✅/❌ with branch and worktree paths.
 
 ## Outputs per task
@@ -68,7 +71,33 @@ echo "Fix the flakey CI job" > .codex/tasks/fix-ci.txt   # slug = fix-ci
 .codex/worktrees/<slug>/
   codex/work-summary.md
   codex/validation-plan.md
+  codex/validation-report.md
+  codex/thread-ids.json   # contains workThreadId and validationThreadId
 ```
+
+### Resuming agent threads later
+Thread sessions are persisted in `~/.codex/sessions` and we record the IDs per task in `codex/thread-ids.json`. To resume:
+
+```ts
+import { Codex } from "@openai/codex-sdk";
+import path from "node:path";
+import fs from "node:fs/promises";
+
+const cwd = ".codex/worktrees/<slug>";
+const { workThreadId, validationThreadId } = JSON.parse(
+  await fs.readFile(path.join(cwd, "codex", "thread-ids.json"), "utf8")
+);
+
+const codex = new Codex();
+const worker = codex.resumeThread(workThreadId, { workingDirectory: cwd });
+const validator = codex.resumeThread(validationThreadId, { workingDirectory: cwd });
+
+// e.g., continue chatting with the worker
+const turn = await worker.run("Pick up where you left off and address the validator's issues.");
+console.log(turn.finalResponse);
+```
+
+You can also resume just one thread (worker or validator) depending on what you need.
 Branch remains at `codex/<slug>` inside that worktree.
 
 ## Notes / tips

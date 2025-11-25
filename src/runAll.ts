@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { runTwoPassOnTask, TwoPassResult } from "./runTwoPass";
+import { runTwoPassOnTask, TwoPassResult } from "./runTwoPass.js";
 
 interface TaskFile {
   taskSlug: string;
@@ -49,7 +49,14 @@ async function main(): Promise<void> {
     if (entry.status === "fulfilled") {
       const { result } = entry.value;
       console.log(
-        `✅ ${taskSlug} | branch: ${result.branchName} | worktree: ${result.worktreePath}`
+        [
+          `✅ ${taskSlug}`,
+          `branch: ${result.branchName}`,
+          `worktree: ${result.worktreePath}`,
+          `workerThread: ${result.workThreadId}`,
+          `validatorThread: ${result.validationThreadId}`,
+          `threadIds: ${result.threadIdsFile}`,
+        ].join(" | ")
       );
     } else {
       failed += 1;

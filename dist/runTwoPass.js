@@ -1,18 +1,12 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.runTwoPassOnTask = runTwoPassOnTask;
-const promises_1 = __importDefault(require("node:fs/promises"));
-const node_path_1 = __importDefault(require("node:path"));
-const node_child_process_1 = require("node:child_process");
-const node_util_1 = require("node:util");
-const codex_sdk_1 = require("@openai/codex-sdk");
-const execFileAsync = (0, node_util_1.promisify)(node_child_process_1.execFile);
+import fs from "node:fs/promises";
+import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { Codex } from "@openai/codex-sdk";
+const execFileAsync = promisify(execFile);
 async function pathExists(target) {
     try {
-        await promises_1.default.access(target);
+        await fs.access(target);
         return true;
     }
     catch {
@@ -24,8 +18,8 @@ async function ensureWorktree(opts) {
     const alreadyExists = await pathExists(worktreePath);
     if (alreadyExists)
         return;
-    await promises_1.default.mkdir(node_path_1.default.dirname(worktreePath), { recursive: true });
-    const relPath = node_path_1.default.relative(repoRoot, worktreePath) || ".";
+    await fs.mkdir(path.dirname(worktreePath), { recursive: true });
+    const relPath = path.relative(repoRoot, worktreePath) || ".";
     await execFileAsync("git", ["worktree", "add", relPath, "-b", branchName, baseBranch], {
         cwd: repoRoot,
     });
@@ -63,32 +57,88 @@ function buildValidationPrompt(taskInstructions, validationPlan) {
         validationPlan,
         "```",
         "Validate whether the approach and work done actually accomplish the original instructions. Use the plan for structure but do not trust its claims—inspect files and run commands yourself, refining the plan if needed.",
-        "Focus on judging the correctness and sufficiency of the work/approach (not just echoing the current state).",
-        "In your final response, give a verdict (ACCEPT/REJECT against the original instructions), list issues, and recommend follow-ups.",
+        "Write your validation report to codex/validation-report.md. Include: a clear ACCEPT/REJECT verdict against the original instructions, numbered issues, and recommended follow-ups.",
+        "After writing the file, reply with a brief confirmation (not the full report).",
     ].join("\n\n");
 }
-async function runTwoPassOnTask(opts) {
+function buildReflectionPrompt(validationReport) {
+    return [
+        "Validator report:",
+        "```",
+        validationReport,
+        "```",
+        "You are the original worker. Briefly react: state whether you agree, what fixes or follow-ups you would prioritize, and any clarifications. Keep it concise.",
+    ].join("\n\n");
+}
+export async function runTwoPassOnTask(opts) {
     const { repoRoot, taskSlug, taskInstructions, baseBranch = "main" } = opts;
     const branchName = `codex/${taskSlug}`;
-    const worktreePath = node_path_1.default.join(repoRoot, ".codex", "worktrees", taskSlug);
+    const worktreePath = path.join(repoRoot, ".codex", "worktrees", taskSlug);
     await ensureWorktree({ repoRoot, worktreePath, branchName, baseBranch });
-    const codex = new codex_sdk_1.Codex();
+    const model = process.env.CODEX_MODEL ?? "gpt-5.1-codex-max";
+    const modelReasoningEffort = (process.env.CODEX_REASONING_EFFORT ?? "high");
+    const codex = new Codex();
     const cwd = worktreePath;
-    const thread1 = codex.startThread({ workingDirectory: cwd });
+    const thread1 = codex.startThread({ workingDirectory: cwd, model, modelReasoningEffort });
     const workPrompt = buildWorkPrompt(taskInstructions);
     const workTurn = await thread1.run(workPrompt);
     const firstPassWorkMessage = workTurn.finalResponse;
-    await promises_1.default.mkdir(node_path_1.default.join(cwd, "codex"), { recursive: true });
+    await fs.mkdir(path.join(cwd, "codex"), { recursive: true });
     const planPrompt = buildPlanPrompt();
     const planTurn = await thread1.run(planPrompt);
-    const firstPassValidationPlanMessage = planTurn.finalResponse;
-    const summaryFile = node_path_1.default.join(cwd, "codex", "work-summary.md");
-    const validationPlanFile = node_path_1.default.join(cwd, "codex", "validation-plan.md");
-    const validationPlanText = await promises_1.default.readFile(validationPlanFile, "utf8");
-    const thread2 = codex.startThread({ workingDirectory: cwd });
+    let firstPassValidationPlanMessage = planTurn.finalResponse;
+    const summaryFile = path.join(cwd, "codex", "work-summary.md");
+    const validationPlanFile = path.join(cwd, "codex", "validation-plan.md");
+    let validationPlanText;
+    try {
+        validationPlanText = await fs.readFile(validationPlanFile, "utf8");
+    }
+    catch (err) {
+        const missingPlan = err?.code === "ENOENT";
+        if (!missingPlan)
+            throw err;
+        const retryPrompt = [
+            "The file codex/validation-plan.md was not found.",
+            "Write the validation plan to codex/validation-plan.md now, then reply with a short confirmation.",
+        ].join("\n\n");
+        const retryTurn = await thread1.run(retryPrompt);
+        firstPassValidationPlanMessage = `${firstPassValidationPlanMessage}\n\n[retry]\n${retryTurn.finalResponse}`;
+        validationPlanText = await fs.readFile(validationPlanFile, "utf8");
+    }
+    const thread2 = codex.startThread({ workingDirectory: cwd, model, modelReasoningEffort });
     const validationPrompt = buildValidationPrompt(taskInstructions, validationPlanText);
     const validationTurn = await thread2.run(validationPrompt);
-    const validationResultMessage = validationTurn.finalResponse;
+    let validationResultMessage = validationTurn.finalResponse;
+    const validationReportFile = path.join(cwd, "codex", "validation-report.md");
+    let validationReportText;
+    try {
+        validationReportText = await fs.readFile(validationReportFile, "utf8");
+    }
+    catch (err) {
+        const missingReport = err?.code === "ENOENT";
+        if (!missingReport)
+            throw err;
+        const retryPrompt = [
+            "The file codex/validation-report.md was not found.",
+            "Write the validation report to codex/validation-report.md now, then reply with a short confirmation.",
+        ].join("\n\n");
+        const retryTurn = await thread2.run(retryPrompt);
+        validationResultMessage = `${validationResultMessage}\n\n[retry]\n${retryTurn.finalResponse}`;
+        validationReportText = await fs.readFile(validationReportFile, "utf8");
+    }
+    const reflectionPrompt = buildReflectionPrompt(validationReportText);
+    const reflectionTurn = await thread1.run(reflectionPrompt);
+    const postValidationReflectionMessage = reflectionTurn.finalResponse;
+    const workThreadId = thread1.id;
+    const validationThreadId = thread2.id;
+    if (!workThreadId || !validationThreadId) {
+        throw new Error("Thread IDs missing; cannot persist session info");
+    }
+    const threadIdsFile = path.join(cwd, "codex", "thread-ids.json");
+    await fs.writeFile(threadIdsFile, JSON.stringify({
+        workThreadId,
+        validationThreadId,
+    }, null, 2));
     return {
         branchName,
         worktreePath,
@@ -97,5 +147,10 @@ async function runTwoPassOnTask(opts) {
         validationResultMessage,
         summaryFile,
         validationPlanFile,
+        validationReportFile,
+        postValidationReflectionMessage,
+        workThreadId,
+        validationThreadId,
+        threadIdsFile,
     };
 }
