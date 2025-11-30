@@ -26,9 +26,13 @@ for each task:
 ## Requirements
 - Node.js 18+
 - Git repository (host repo)
-- Environment: `CODEX_API_KEY` (and `OPENAI_BASE_URL` if you use a custom
-  endpoint). Optional: `CODEX_MODEL` (default `gpt-5.1-codex-max`) and
-  `CODEX_REASONING_EFFORT` (default `high`).
+- Environment: `CODEX_API_KEY` and `CODEX_MODEL` (or set `model` in
+  `codex.config.toml`). No hardcoded model fallback is used.
+- Custom endpoint (optional): `CODEX_BASE_URL` or `OPENAI_BASE_URL`.
+- Optional: `codex.config.toml` in the host repo (or point to it with
+  `CODEX_CONFIG_PATH`). The runner mirrors the gov-gpt tooling and will read
+  model, sandbox, approval policy, network/web search toggles from this config.
+  A `.env` in the host repo is also loaded automatically.
 
 ## Using in this repo (direct clone)
 ```bash
@@ -46,6 +50,15 @@ Then, from the **host repo root**:
 ```bash
 node addons/codex-runner/dist/runAll.js
 ```
+
+### CLI flags
+- `--base-branch <name>`: branch to base worktrees on (default `main`).
+- `--tasks-dir <path>`: directory containing `.txt` task files (default `.codex/tasks`).
+- `--tasks-glob <glob>`: filter task filenames (simple `*`/`?` wildcards).
+- `--dry-run`: list tasks + intended branch/worktree without running Codex.
+
+### Maintenance helpers
+- `npm run clean-worktrees` (dry-run) or `npm run clean-worktrees -- --yes` to remove `.codex/worktrees/*` and delete matching `codex/<slug>` branches.
 
 ## Prepare task files (host repo)
 ```bash

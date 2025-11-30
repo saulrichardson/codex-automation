@@ -6,14 +6,17 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/runAll.js",
-    "doctor": "node scripts/doctor.js"
+    "doctor": "node scripts/doctor.js",
+    "clean-worktrees": "node scripts/cleanWorktrees.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "@openai/codex-sdk": "^0.61.0",
+    "@iarna/toml": "^2.2.5",
+    "@openai/codex-sdk": "^0.63.0",
+    "dotenv": "^16.4.5",
     "semver": "^7.7.3"
   },
   "devDependencies": {

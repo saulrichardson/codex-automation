@@ -3,6 +3,11 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Codex } from "@openai/codex-sdk";
+import { loadConfig, threadOptionsForCwd } from "./config.js";
+import { buildPlanPrompt, buildReflectionPrompt, buildValidationPrompt, buildWorkPrompt } from "./prompts.js";
+import { runWithRetries } from "./lib/runWithRetries.js";
+import { createLogger } from "./lib/logger.js";
+import { ensureDir, readIfExists, writeJson } from "./lib/fs.js";
 const execFileAsync = promisify(execFile);
 async function pathExists(target) {
     try {
@@ -24,121 +29,69 @@ async function ensureWorktree(opts) {
         cwd: repoRoot,
     });
 }
-function buildWorkPrompt(taskInstructions) {
-    return [
-        "You are an autonomous coding agent working in this repository.",
-        "Task instructions:",
-        "```",
-        taskInstructions,
-        "```",
-        "Work as comprehensively as you reasonably can to complete the task.",
-        "You may edit files and run commands.",
-        "At the end, explain what you did and what you're unsure about.",
-        "Do not write summary/validation files yet.",
-    ].join("\n\n");
-}
-function buildPlanPrompt() {
-    return [
-        "Write two files in the repository:",
-        "1. codex/work-summary.md: summarize what you did and any open questions.",
-        "2. codex/validation-plan.md: numbered checklist a validator can follow.",
-        "After writing the files, reply with a brief confirmation (not the full file contents).",
-    ].join("\n\n");
-}
-function buildValidationPrompt(taskInstructions, validationPlan) {
-    return [
-        "You are the validator agent. You did not perform the work.",
-        "Original task instructions (source of truth):",
-        "```",
-        taskInstructions,
-        "```",
-        "First-pass validation plan (guidance only—verify independently):",
-        "```",
-        validationPlan,
-        "```",
-        "Validate whether the approach and work done actually accomplish the original instructions. Use the plan for structure but do not trust its claims—inspect files and run commands yourself, refining the plan if needed.",
-        "Write your validation report to codex/validation-report.md. Include: a clear ACCEPT/REJECT verdict against the original instructions, numbered issues, and recommended follow-ups.",
-        "After writing the file, reply with a brief confirmation (not the full report).",
-    ].join("\n\n");
-}
-function buildReflectionPrompt(validationReport) {
-    return [
-        "Validator report:",
-        "```",
-        validationReport,
-        "```",
-        "You are the original worker. Briefly react: state whether you agree, what fixes or follow-ups you would prioritize, and any clarifications. Keep it concise.",
-    ].join("\n\n");
-}
 export async function runTwoPassOnTask(opts) {
     const { repoRoot, taskSlug, taskInstructions, baseBranch = "main" } = opts;
     const branchName = `codex/${taskSlug}`;
     const worktreePath = path.join(repoRoot, ".codex", "worktrees", taskSlug);
+    const log = createLogger(taskSlug);
+    const { codexConfig, threadOptionsBase, apiKey, baseURL } = await loadConfig(repoRoot);
     await ensureWorktree({ repoRoot, worktreePath, branchName, baseBranch });
-    const model = process.env.CODEX_MODEL ?? "gpt-5.1-codex-max";
-    const modelReasoningEffort = (process.env.CODEX_REASONING_EFFORT ?? "high");
-    const codex = new Codex();
-    const cwd = worktreePath;
-    const thread1 = codex.startThread({ workingDirectory: cwd, model, modelReasoningEffort });
-    const workPrompt = buildWorkPrompt(taskInstructions);
-    const workTurn = await thread1.run(workPrompt);
+    log.info(`worktree ready at ${worktreePath} (branch ${branchName})`);
+    const threadOptions = threadOptionsForCwd(threadOptionsBase, worktreePath);
+    const codex = new Codex({
+        apiKey,
+        baseURL,
+        ...(codexConfig ? { config: codexConfig } : undefined),
+    });
+    const thread1 = codex.startThread(threadOptions);
+    const workTurn = await runWithRetries(thread1, buildWorkPrompt(taskInstructions));
     const firstPassWorkMessage = workTurn.finalResponse;
-    await fs.mkdir(path.join(cwd, "codex"), { recursive: true });
-    const planPrompt = buildPlanPrompt();
-    const planTurn = await thread1.run(planPrompt);
+    const codexDir = path.join(worktreePath, "codex");
+    await ensureDir(codexDir);
+    const planTurn = await runWithRetries(thread1, buildPlanPrompt());
     let firstPassValidationPlanMessage = planTurn.finalResponse;
-    const summaryFile = path.join(cwd, "codex", "work-summary.md");
-    const validationPlanFile = path.join(cwd, "codex", "validation-plan.md");
-    let validationPlanText;
-    try {
-        validationPlanText = await fs.readFile(validationPlanFile, "utf8");
-    }
-    catch (err) {
-        const missingPlan = err?.code === "ENOENT";
-        if (!missingPlan)
-            throw err;
+    const summaryFile = path.join(codexDir, "work-summary.md");
+    const validationPlanFile = path.join(codexDir, "validation-plan.md");
+    let validationPlanText = await readIfExists(validationPlanFile);
+    if (!validationPlanText) {
         const retryPrompt = [
             "The file codex/validation-plan.md was not found.",
             "Write the validation plan to codex/validation-plan.md now, then reply with a short confirmation.",
         ].join("\n\n");
-        const retryTurn = await thread1.run(retryPrompt);
+        const retryTurn = await runWithRetries(thread1, retryPrompt);
         firstPassValidationPlanMessage = `${firstPassValidationPlanMessage}\n\n[retry]\n${retryTurn.finalResponse}`;
-        validationPlanText = await fs.readFile(validationPlanFile, "utf8");
+        validationPlanText = await readIfExists(validationPlanFile);
+        if (!validationPlanText) {
+            throw new Error("Validation plan was not written after retry");
+        }
     }
-    const thread2 = codex.startThread({ workingDirectory: cwd, model, modelReasoningEffort });
-    const validationPrompt = buildValidationPrompt(taskInstructions, validationPlanText);
-    const validationTurn = await thread2.run(validationPrompt);
+    const thread2 = codex.startThread(threadOptions);
+    const validationTurn = await runWithRetries(thread2, buildValidationPrompt(taskInstructions, validationPlanText));
     let validationResultMessage = validationTurn.finalResponse;
-    const validationReportFile = path.join(cwd, "codex", "validation-report.md");
-    let validationReportText;
-    try {
-        validationReportText = await fs.readFile(validationReportFile, "utf8");
-    }
-    catch (err) {
-        const missingReport = err?.code === "ENOENT";
-        if (!missingReport)
-            throw err;
+    const validationReportFile = path.join(codexDir, "validation-report.md");
+    let validationReportText = await readIfExists(validationReportFile);
+    if (!validationReportText) {
         const retryPrompt = [
             "The file codex/validation-report.md was not found.",
             "Write the validation report to codex/validation-report.md now, then reply with a short confirmation.",
         ].join("\n\n");
-        const retryTurn = await thread2.run(retryPrompt);
+        const retryTurn = await runWithRetries(thread2, retryPrompt);
         validationResultMessage = `${validationResultMessage}\n\n[retry]\n${retryTurn.finalResponse}`;
-        validationReportText = await fs.readFile(validationReportFile, "utf8");
+        validationReportText = await readIfExists(validationReportFile);
+        if (!validationReportText) {
+            throw new Error("Validation report was not written after retry");
+        }
     }
-    const reflectionPrompt = buildReflectionPrompt(validationReportText);
-    const reflectionTurn = await thread1.run(reflectionPrompt);
+    const reflectionTurn = await runWithRetries(thread1, buildReflectionPrompt(validationReportText));
     const postValidationReflectionMessage = reflectionTurn.finalResponse;
     const workThreadId = thread1.id;
     const validationThreadId = thread2.id;
     if (!workThreadId || !validationThreadId) {
         throw new Error("Thread IDs missing; cannot persist session info");
     }
-    const threadIdsFile = path.join(cwd, "codex", "thread-ids.json");
-    await fs.writeFile(threadIdsFile, JSON.stringify({
-        workThreadId,
-        validationThreadId,
-    }, null, 2));
+    const threadIdsFile = path.join(codexDir, "thread-ids.json");
+    await writeJson(threadIdsFile, { workThreadId, validationThreadId });
+    log.info(`workerThread=${workThreadId} validatorThread=${validationThreadId}`);
     return {
         branchName,
         worktreePath,
