@@ -22,6 +22,13 @@ npm run build
 CODEX_API_KEY=... CODEX_MODEL=gpt-5.1-codex node dist/runAll.js
 ```
 
+With Makefile:
+```bash
+make run ARGS="--tasks-dir .codex/tasks"
+# or just: CODEX_API_KEY=... CODEX_MODEL=... make run
+make dry-run ARGS="--tasks-glob fix-*"
+```
+
 ## As a Submodule in a Host Repo
 TL;DR
 ```bash
