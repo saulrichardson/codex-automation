@@ -2,6 +2,26 @@
 
 Run Codex on a set of plain-text tasks, one branch/worktree per task, with a built-in validator pass.
 
+```
+             .codex/tasks/*.txt
+                       │ (parallel)
+                       ▼
+               task <slug>.txt
+                  │
+      branch codex/<slug> + worktree .codex/worktrees/<slug>
+                  │
+          [Pass 1: worker]
+          - does the task
+          - writes codex/work-summary.md
+          - writes codex/validation-plan.md
+                  │
+          [Pass 2: validator]
+          - independent check
+          - writes codex/validation-report.md
+                  │
+          thread-ids saved → codex/thread-ids.json
+```
+
 ## What It Does (high level)
 - Reads `.codex/tasks/*.txt` (one file = one task slug).
 - For each task: creates branch `codex/<slug>` and worktree `.codex/worktrees/<slug>`.
