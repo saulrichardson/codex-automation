@@ -22,12 +22,16 @@ npm run build
 CODEX_API_KEY=... CODEX_MODEL=gpt-5.1-codex node dist/runAll.js
 ```
 
-With Makefile:
+With Makefile (direct clone only):
 ```bash
 make run ARGS="--tasks-dir .codex/tasks"
-# or just: CODEX_API_KEY=... CODEX_MODEL=... make run
+# env inline works too: CODEX_API_KEY=... CODEX_MODEL=... make run
 make dry-run ARGS="--tasks-glob fix-*"
+make clean-worktrees               # dry-run
+make clean-worktrees ARGS="--yes" # remove worktrees/branches
 ```
+
+> Note: Makefile targets assume you run them from the runner repo root. When used as a submodule, run the node command from the host repo root instead (see below).
 
 ## As a Submodule in a Host Repo
 TL;DR
@@ -75,6 +79,7 @@ Run from the host repo root:
 ```bash
 npm run clean-worktrees          # dry-run
 npm run clean-worktrees -- --yes # remove .codex/worktrees/* and delete codex/<slug> branches
+# or: CODEX_API_KEY=... CODEX_MODEL=... node addons/codex-runner/scripts/cleanWorktrees.js --yes
 ```
 
 ## Tips
