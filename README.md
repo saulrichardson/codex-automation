@@ -23,6 +23,13 @@ CODEX_API_KEY=... CODEX_MODEL=gpt-5.1-codex node dist/runAll.js
 ```
 
 ## As a Submodule in a Host Repo
+TL;DR
+```bash
+git submodule add git@github.com:saulrichardson/codex-automation.git addons/codex-runner
+cd addons/codex-runner && npm ci && npm run build
+CODEX_API_KEY=... CODEX_MODEL=gpt-5.1-codex node addons/codex-runner/dist/runAll.js
+```
+
 ```bash
 git submodule add git@github.com:saulrichardson/codex-automation.git addons/codex-runner
 cd addons/codex-runner && npm ci && npm run build
