@@ -17,10 +17,9 @@ async function readCodexConfig(configPath: string): Promise<Record<string, any> 
 }
 
 export interface LoadedConfig {
-  codexConfig?: Record<string, any>;
   threadOptionsBase: StartThreadOptions;
   apiKey: string;
-  baseURL?: string;
+  baseUrl?: string;
 }
 
 export async function loadConfig(repoRoot: string): Promise<LoadedConfig> {
@@ -60,12 +59,14 @@ export async function loadConfig(repoRoot: string): Promise<LoadedConfig> {
 
   const apiKey = process.env.CODEX_API_KEY;
   if (!apiKey) {
-    throw new Error("CODEX_API_KEY is required (set in env or .env)");
+    throw new Error(
+      "CODEX_API_KEY is required (set in env or .env). This workflow does not fall back to `codex login` credentials."
+    );
   }
 
-  const baseURL = process.env.CODEX_BASE_URL ?? process.env.OPENAI_BASE_URL;
+  const baseUrl = process.env.CODEX_BASE_URL ?? process.env.OPENAI_BASE_URL;
 
-  return { codexConfig, threadOptionsBase, apiKey, baseURL };
+  return { threadOptionsBase, apiKey, baseUrl };
 }
 
 export function threadOptionsForCwd(base: StartThreadOptions, cwd: string): StartThreadOptions {

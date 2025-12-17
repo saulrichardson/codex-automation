@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { createLogger } from "./lib/logger.js";
 import { runTwoPassOnTask, TwoPassResult } from "./runTwoPass.js";
+
+const execFileAsync = promisify(execFile);
 
 interface TaskFile {
   taskSlug: string;
@@ -70,17 +74,56 @@ function globToRegex(glob: string): RegExp {
 
 async function findTaskFiles(repoRoot: string, tasksDir: string, tasksGlob?: string): Promise<TaskFile[]> {
   const fullTasksDir = path.isAbsolute(tasksDir) ? tasksDir : path.join(repoRoot, tasksDir);
-  const entries = await fs.readdir(fullTasksDir);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(fullTasksDir);
+  } catch (err: any) {
+    if (err?.code === "ENOENT") {
+      throw new Error(`Tasks directory not found: ${fullTasksDir}`);
+    }
+    throw err;
+  }
   const pattern = tasksGlob ? globToRegex(tasksGlob) : undefined;
 
-  const taskFiles = entries.filter((name) => name.endsWith(".txt") && (!pattern || pattern.test(name)));
+  const taskFiles = entries
+    .filter((name) => name.endsWith(".txt") && (!pattern || pattern.test(name)))
+    .sort();
   if (taskFiles.length === 0) {
     throw new Error(`No task files found in ${fullTasksDir}${tasksGlob ? ` matching ${tasksGlob}` : ""}`);
   }
-  return taskFiles.map((name) => ({
-    taskSlug: path.basename(name, ".txt"),
-    instructionsPath: path.join(fullTasksDir, name),
-  }));
+  return taskFiles
+    .map((name) => ({
+      taskSlug: path.basename(name, ".txt"),
+      instructionsPath: path.join(fullTasksDir, name),
+      fileName: name,
+    }))
+    .map(({ taskSlug, instructionsPath, fileName }) => {
+      if (!taskSlug) {
+        throw new Error(`Invalid task filename (empty slug): ${fileName}`);
+      }
+      return { taskSlug, instructionsPath };
+    });
+}
+
+async function validateTaskRefs(repoRoot: string, tasks: TaskFile[]): Promise<void> {
+  const invalid: string[] = [];
+  for (const task of tasks) {
+    const branchName = `codex/${task.taskSlug}`;
+    try {
+      await execFileAsync("git", ["check-ref-format", "--branch", branchName], { cwd: repoRoot });
+    } catch {
+      invalid.push(`${task.taskSlug} → ${branchName}`);
+    }
+  }
+  if (invalid.length > 0) {
+    throw new Error(
+      [
+        "One or more task slugs would create an invalid git branch name.",
+        "Rename the task file(s) to a slug that forms a valid branch ref, or pass a different --tasks-glob.",
+        ...invalid.map((s) => `- ${s}`),
+      ].join("\n")
+    );
+  }
 }
 
 function formatFailure(reason: unknown): string {
@@ -96,6 +139,7 @@ async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
 
   const tasks = await findTaskFiles(repoRoot, options.tasksDir, options.tasksGlob);
+  await validateTaskRefs(repoRoot, tasks);
 
   if (options.dryRun) {
     tasks.forEach((task) => {
@@ -106,27 +150,19 @@ async function main(): Promise<void> {
     return;
   }
 
-  const taskPromises = tasks.map(async (task) => {
-    const taskInstructions = await fs.readFile(task.instructionsPath, "utf8");
-    const result = await runTwoPassOnTask({
-      repoRoot,
-      taskSlug: task.taskSlug,
-      taskInstructions,
-      baseBranch: options.baseBranch,
-    });
-    return { taskSlug: task.taskSlug, result };
-  });
-
-  const settled = await Promise.allSettled(taskPromises);
-
   let failed = 0;
-  settled.forEach((entry, index) => {
-    const taskSlug = tasks[index]?.taskSlug ?? "unknown-task";
-    if (entry.status === "fulfilled") {
-      const { result } = entry.value;
+  for (const task of tasks) {
+    try {
+      const taskInstructions = await fs.readFile(task.instructionsPath, "utf8");
+      const result = await runTwoPassOnTask({
+        repoRoot,
+        taskSlug: task.taskSlug,
+        taskInstructions,
+        baseBranch: options.baseBranch,
+      });
       console.log(
         [
-          `✅ ${taskSlug}`,
+          `✅ ${task.taskSlug}`,
           `branch: ${result.branchName}`,
           `worktree: ${result.worktreePath}`,
           `workerThread: ${result.workThreadId}`,
@@ -134,11 +170,11 @@ async function main(): Promise<void> {
           `threadIds: ${result.threadIdsFile}`,
         ].join(" | ")
       );
-    } else {
+    } catch (err) {
       failed += 1;
-      log.error(`${taskSlug} | ${formatFailure(entry.reason)}`);
+      log.error(`${task.taskSlug} | ${formatFailure(err)}`);
     }
-  });
+  }
 
   if (failed > 0) {
     process.exitCode = 1;

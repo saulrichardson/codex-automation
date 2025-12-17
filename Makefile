@@ -17,9 +17,7 @@ doctor: install
 
 # Run tasks; pass extra flags with ARGS="--tasks-dir .codex/tasks --tasks-glob foo*"
 run: build
-	@if [ -z "$$CODEX_API_KEY" ] || [ -z "$$CODEX_MODEL" ]; then \
-		echo "Set CODEX_API_KEY and CODEX_MODEL before running."; exit 1; \
-	fi
+	@$(NODE) scripts/doctor.js
 	$(RUN) $(ARGS)
 
 dry-run: build

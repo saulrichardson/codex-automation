@@ -48,10 +48,36 @@ async function pathExists(target: string): Promise<boolean> {
   }
 }
 
+async function assertExistingWorktreeIsUsable(worktreePath: string, expectedBranch: string): Promise<void> {
+  try {
+    const inside = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: worktreePath });
+    if (inside.stdout.trim() !== "true") {
+      throw new Error(`Expected a git worktree, but rev-parse returned: ${inside.stdout.trim()}`);
+    }
+
+    const head = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: worktreePath });
+    const actualBranch = head.stdout.trim();
+    if (actualBranch !== expectedBranch) {
+      throw new Error(`Expected branch ${expectedBranch}, but found ${actualBranch}`);
+    }
+  } catch (err: any) {
+    throw new Error(
+      [
+        `Worktree path already exists but is not the expected git worktree: ${worktreePath}`,
+        `Reason: ${String(err?.message ?? err)}`,
+        "Fix: remove the directory or run the cleanup script, then retry.",
+      ].join("\n")
+    );
+  }
+}
+
 async function ensureWorktree(opts: WorktreeOptions): Promise<void> {
   const { repoRoot, worktreePath, branchName, baseBranch } = opts;
   const alreadyExists = await pathExists(worktreePath);
-  if (alreadyExists) return;
+  if (alreadyExists) {
+    await assertExistingWorktreeIsUsable(worktreePath, branchName);
+    return;
+  }
 
   await fs.mkdir(path.dirname(worktreePath), { recursive: true });
   const relPath = path.relative(repoRoot, worktreePath) || ".";
@@ -68,7 +94,7 @@ export async function runTwoPassOnTask(opts: RunTwoPassOptions): Promise<TwoPass
   const worktreePath = path.join(repoRoot, ".codex", "worktrees", taskSlug);
 
   const log = createLogger(taskSlug);
-  const { codexConfig, threadOptionsBase, apiKey, baseURL } = await loadConfig(repoRoot);
+  const { threadOptionsBase, apiKey, baseUrl } = await loadConfig(repoRoot);
 
   await ensureWorktree({ repoRoot, worktreePath, branchName, baseBranch });
   log.info(`worktree ready at ${worktreePath} (branch ${branchName})`);
@@ -77,8 +103,7 @@ export async function runTwoPassOnTask(opts: RunTwoPassOptions): Promise<TwoPass
 
   const codex = new Codex({
     apiKey,
-    baseURL,
-    ...(codexConfig ? ({ config: codexConfig } as any) : undefined),
+    baseUrl,
   });
 
   const thread1 = codex.startThread(threadOptions);
@@ -93,6 +118,21 @@ export async function runTwoPassOnTask(opts: RunTwoPassOptions): Promise<TwoPass
 
   const summaryFile = path.join(codexDir, "work-summary.md");
   const validationPlanFile = path.join(codexDir, "validation-plan.md");
+
+  let summaryText = await readIfExists(summaryFile);
+  if (!summaryText) {
+    const retryPrompt = [
+      "The file codex/work-summary.md was not found.",
+      "Write the summary to codex/work-summary.md now, then reply with a short confirmation.",
+    ].join("\n\n");
+
+    await runWithRetries(thread1, retryPrompt);
+    summaryText = await readIfExists(summaryFile);
+    if (!summaryText) {
+      throw new Error("Work summary was not written after retry");
+    }
+  }
+
   let validationPlanText = await readIfExists(validationPlanFile);
   if (!validationPlanText) {
     const retryPrompt = [

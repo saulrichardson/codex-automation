@@ -42,10 +42,10 @@ export async function loadConfig(repoRoot) {
     }
     const apiKey = process.env.CODEX_API_KEY;
     if (!apiKey) {
-        throw new Error("CODEX_API_KEY is required (set in env or .env)");
+        throw new Error("CODEX_API_KEY is required (set in env or .env). This workflow does not fall back to `codex login` credentials.");
     }
-    const baseURL = process.env.CODEX_BASE_URL ?? process.env.OPENAI_BASE_URL;
-    return { codexConfig, threadOptionsBase, apiKey, baseURL };
+    const baseUrl = process.env.CODEX_BASE_URL ?? process.env.OPENAI_BASE_URL;
+    return { threadOptionsBase, apiKey, baseUrl };
 }
 export function threadOptionsForCwd(base, cwd) {
     return { ...base, workingDirectory: cwd };
